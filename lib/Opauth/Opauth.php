@@ -2,8 +2,11 @@
 /**
  * Opauth
  * Multi-provider authentication framework for PHP
+ * 
+ * This is a fork
  *
  * @copyright    Copyright © 2012 U-Zyn Chua (http://uzyn.com)
+ * @copyright    Copyright © 2013 olamedia (olamedia@gmail.com)
  * @link         http://opauth.org
  * @package      Opauth
  * @license      MIT License
@@ -23,11 +26,6 @@ class Opauth {
 	 */
 	public $config;
 	
-	/**
-	 * Environment variables
-	 */
-	public $env;
-	
 	/** 
 	 * Strategy map: for mapping URL-friendly name to Class name
 	 */
@@ -40,151 +38,32 @@ class Opauth {
 	 * @param array $config User configuration
 	 * @param boolean $run Whether Opauth should auto run after initialization.
 	 */
-	public function __construct($config = array(), $run = true) {
-		/**
-		 * Configurable settings
-		 */
-		$this->config = array_merge(array(
-			'host' => ((array_key_exists('HTTPS', $_SERVER) && $_SERVER['HTTPS'])?'https':'http').'://'.$_SERVER['HTTP_HOST'],
+	public function __construct($config = []) {
+		$defaults = [
+			'host' => 'http'.((array_key_exists('HTTPS', $_SERVER) && $_SERVER['HTTPS'])?'s':'').'://'.$_SERVER['HTTP_HOST'],
 			'path' => '/',
-			'callback_url' => '{path}callback',
+			'callback_url' => '/callback',
 			'callback_transport' => 'session',
 			'debug' => false,
-			
-			/**
-		 	* Security settings
-		 	*/
-			'security_salt' => 'LDFmiilYf8Fyw5W10rx4W1KsVrieQCnpBzzpTBWA5vJidQKDx8pMJbmw28R1C4m',
+			'security_salt' => null,
 			'security_iteration' => 300,
-			'security_timeout' => '2 minutes'
-		), $config);
-		
-		/**
-		 * Environment variables, including config
-		 * Used mainly as accessors
-		 */
-		$this->env = array_merge(array(
+			'security_timeout' => '2 minutes',
 			'request_uri' => $_SERVER['REQUEST_URI'],
-			'complete_path' => $this->config['host'].$this->config['path'],
-			'lib_dir' => dirname(__FILE__).'/',
-			'strategy_dir' => dirname(__FILE__).'/Strategy/'
-		), $this->config);
+			'complete_path' => $config['host'].$config['path'],
+		];
+		$config = array_merge($defaults, $config);
+		$this->config = $config;
 		
-		if (!class_exists('OpauthStrategy')) {
-			require $this->env['lib_dir'].'OpauthStrategy.php';
-		}
-		
-		foreach ($this->env as $key => $value) {
-			$this->env[$key] = OpauthStrategy::envReplace($value, $this->env);
-		}
-	
-		if ($this->env['security_salt'] == 'LDFmiilYf8Fyw5W10rx4W1KsVrieQCnpBzzpTBWA5vJidQKDx8pMJbmw28R1C4m'){
+		if (null === $this->config['security_salt']){
 			trigger_error('Please change the value of \'security_salt\' to a salt value specific to your application', E_USER_NOTICE);
 		}
-		
-		$this->loadStrategies();
-		
-		if ($run) {
-			$this->run();
-		}
-	}
-	public function runStrategy($strategyId, $action = null){
-		if (array_key_exists($strategyId, $this->strategyMap)) {
-			$name = $this->strategyMap[$strategyId]['name'];
-			$class = $this->strategyMap[$strategyId]['class'];
-			$strategy = $this->env['Strategy'][$name];
-			
-			// Strip out critical parameters
-			$safeEnv = $this->env;
-			unset($safeEnv['Strategy']);
-			
-			$actualClass = $this->requireStrategy($class);
-			$this->Strategy = new $actualClass($strategy, $safeEnv);
-			
-			$this->Strategy->callAction(null===$action?'request':$action); // 'request' is for compatibility only
-		} else {
-			trigger_error('Unsupported or undefined Opauth strategy - '.$strategyId, E_USER_ERROR);
-		}
-	}
-	/**
-	 * Run Opauth:
-	 * Parses request URI and perform defined authentication actions based based on it.
-	 */
-	public function run() {
-		$this->parseUri();
-		
-		if (!empty($this->env['params']['strategy'])) {
-			if (strtolower($this->env['params']['strategy']) == 'callback') {
-				$this->callback();
-			} else {
-				if (empty($this->env['params']['action'])) {
-					$this->env['params']['action'] = null;
-				}
-				$this->runStrategy($this->env['params']['strategy'], $this->env['params']['action']);
-			}
-		} else {
-			$sampleStrategy = array_pop($this->env['Strategy']);
-			trigger_error('No strategy is requested. Try going to '.$this->env['complete_path'].$sampleStrategy['strategy_url_name'].' to authenticate with '.$sampleStrategy['strategy_name'], E_USER_NOTICE);
-		}
 	}
 	
-	/**
-	 * Parses Request URI
-	 */
-	private function parseUri() {
-		$this->env['request'] = substr($this->env['request_uri'], strlen($this->env['path']) - 1);
-		
-		if (preg_match_all('/\/([A-Za-z0-9-_]+)/', $this->env['request'], $matches)) {
-			foreach ($matches[1] as $match) {
-				$this->env['params'][] = $match;
-			}
-		}
-		
-		if (!empty($this->env['params'][0])) {
-			$this->env['params']['strategy'] = $this->env['params'][0];
-		}
-		if (!empty($this->env['params'][1])) {
-			$this->env['params']['action'] = $this->env['params'][1];
-		}
+	public function runStrategy($strategyClass, $strategyConfig = [], $action = null){
+		$this->Strategy = new $strategyClass($strategyConfig, $this->config);
+		$this->Strategy->callAction(null===$action?'request':$action); // 'request' is for compatibility only
 	}
 	
-	/**
-	 * Load strategies from user-input $config
-	 */	
-	private function loadStrategies() {
-		if (isset($this->env['Strategy']) && is_array($this->env['Strategy']) && count($this->env['Strategy']) > 0) {
-			foreach ($this->env['Strategy'] as $key => $strategy) {
-				if (!is_array($strategy)) {
-					$key = $strategy;
-					$strategy = array();
-				}
-				
-				$strategyClass = $key;
-				if (array_key_exists('strategy_class', $strategy)) {
-					$strategyClass = $strategy['strategy_class'];
-				} else {
-					$strategy['strategy_class'] = $strategyClass;
-				}
-				
-				$strategy['strategy_name'] = $key;
-				
-				// Define a URL-friendly name
-				if (empty($strategy['strategy_url_name'])) {
-					$strategy['strategy_url_name'] = strtolower($key);
-				}
-				
-				$this->strategyMap[$strategy['strategy_url_name']] = array(
-					'name' => $key,
-					'class' => $strategyClass
-				);
-				
-				$this->env['Strategy'][$key] = $strategy;
-			}
-		} else {
-			trigger_error('No Opauth strategies defined', E_USER_ERROR);
-		}
-	}
-		
 	/**
 	 * Validate $auth response
 	 * Accepts either function call or HTTP-based call
@@ -210,7 +89,7 @@ class Opauth {
 			return false;
 		}
 		
-		$hash = OpauthStrategy::hash($input, $timestamp, $this->env['security_iteration'], $this->env['security_salt']);
+		$hash = OpauthStrategy::hash($input, $timestamp, $this->config['security_iteration'], $this->config['security_salt']);
 		
 		if (strcasecmp($hash, $signature) !== 0) {
 			$reason = "Signature does not validate";
@@ -268,49 +147,7 @@ class Opauth {
 		print_r($response);
 		echo "</pre>";
 	}
-	
-	/**
-	 * Loads a strategy, firstly check if the
-	 *  strategy's class already exists, especially for users of Composer;
-	 * If it isn't, attempts to load it from $this->env['strategy_dir']
-	 * 
-	 * @param string $strategy Name of a strategy
-	 * @return string Class name of the strategy, usually StrategyStrategy
-	 */
-	private function requireStrategy($strategy) {
-		if (!class_exists($strategy.'Strategy')) {
-			// Include dir where Git repository for strategy is cloned directly without 
-			// specifying a dir name, eg. opauth-facebook
-			$directories = array(
-				$this->env['strategy_dir'].$strategy.'/',
-				$this->env['strategy_dir'].'opauth-'.strtolower($strategy).'/',
-				$this->env['strategy_dir'].strtolower($strategy).'/',
-				$this->env['strategy_dir'].'Opauth-'.$strategy.'/'
-			);
-			
-			// Include deprecated support for strategies without Strategy postfix as class name or filename
-			$classNames = array(
-				$strategy.'Strategy',
-				$strategy
-			);
-			
-			$found = false;
-			foreach ($directories as $dir) {
-				foreach ($classNames as $name) {
-					if (file_exists($dir.$name.'.php')) {
-						$found = true;
-						require $dir.$name.'.php';
-						return $name;
-					}
-				}
-			}
-			
-			if (!$found) {
-				trigger_error('Strategy class file ('.$this->env['strategy_dir'].$strategy.'/'.$strategy.'Strategy.php'.') is missing', E_USER_ERROR);
-			}
-		}
-		return $strategy.'Strategy';
-	}
+
 	
 	/**
 	 * Prints out variable with <pre> tags
